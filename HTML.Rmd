@@ -1,0 +1,282 @@
+---
+title: "Preparacion de Datos."
+author: "Francisco Mateo Cortez"
+date: "2024-11-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#Librerias
+```{r}
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(mFilter)
+install.packages("XML")
+library(XML)
+```
+
+#Serie Ipc.
+```{r}
+# Cargar el archivo de datos de IPC
+Serie_de_IPC_hasta_septiembre_2024 <- suppressWarnings(
+  read_excel("Datos/Series originales/Serie de IPC hasta septiembre 2024.xls", 
+    sheet = "Índices IPC Cobertura Nacional")
+)
+
+# Verificar que el archivo se ha cargado correctamente
+head(Serie_de_IPC_hasta_septiembre_2024)
+
+# De la serie original del ipc solo tomo la fila 9 donde están los números índices
+ipc <- Serie_de_IPC_hasta_septiembre_2024[9, ]
+
+# Paso 1: Extraer los valores numéricos de las columnas 2 en adelante
+ipc_values <- as.numeric(ipc[1, 2:95])  # Extrae los valores desde la columna 2 en adelante
+
+# Paso 2: Crear una secuencia de fechas desde diciembre de 2016 hasta septiembre de 2024
+fechas <- seq(from = as.Date("2016-12-01"), to = as.Date("2024-09-01"), by = "month")
+
+# Paso 3: Crear el nuevo dataframe con las fechas y los valores del IPC
+ipc_data <- data.frame(fecha = fechas, ipc_nivel_general = ipc_values)
+
+# Verificar el dataframe resultante
+head(ipc_data)
+
+# Toma otra serie de IPC FAEA para tener datos de 2015 y 2016
+
+
+IPC_Empalmado <- read_excel("Datos/Series originales/IPC_Empalmado.xlsx", 
+    col_types = c("date", "numeric", "text", 
+        "text", "text", "numeric"))
+View(IPC_Empalmado)
+
+#Tomo los datos que necesito.
+
+ipc_15_16 <- IPC_Empalmado[268:290,1:2]
+colnames(ipc_15_16) <- c("fecha", "ipc_nivel_general")
+#combino los datos
+ipc_data <- rbind(ipc_data, ipc_15_16)
+ipc_data <- ipc_data %>% arrange(fecha)
+#agrupo por trimestres
+ipc_data <- ipc_data %>%
+  mutate(trimestre = floor_date(fecha, "quarter"))  # Crea una nueva columna para el trimestre
+
+# Paso 2: Agrupar por trimestre y calcular el promedio trimestral de ipc_nivel_general
+ipc_trimestral <- ipc_data %>%
+  group_by(trimestre) %>%
+  summarise(ipc_nivel_general_trimestral = mean(ipc_nivel_general, na.rm = TRUE))  # Cambia 'mean' si
+```
+
+#Estimacion Brecha Producto.
+```{r}
+#Tomo la serie del PBI desestacionalizado a precios 2004.
+sh_oferta_demanda_desest_09_24 <- read_excel("Datos/Series originales/sh_oferta_demanda_desest_09_24.xlsx", 
+    sheet = "desestacionalizado n", col_types = c("text", 
+        "text", "text", "text", "text", "text", 
+        "text", "text"))
+
+head(sh_oferta_demanda_desest_09_24)
+
+#Tomo los valores del PIB con inicio I-004.
+
+pib_real <- sh_oferta_demanda_desest_09_24[[3]]  # Extraer la columna 3
+
+# Eliminar los valores NA
+pib_real <- na.omit(pib_real)
+
+fechas_trimestrales <- seq(from = as.Date("2004-01-01"), to = as.Date("2024-06-01"), by = "quarter")
+
+
+if (length(pib_real) == length(fechas_trimestrales)) {
+  dataset_pbi <- data.frame(fecha = fechas_trimestrales, pib_real = pib_real)
+} else {
+  stop("Las longitudes de 'pib_real' y 'fechas_trimestrales' no coinciden.")
+}
+
+dataset_pbi$pib_real <- as.numeric(dataset_pbi$pib_real)
+
+str(dataset_pbi)
+
+#Estimo el PBI potencial con el filtro Kevin-prescot
+
+hp_result <- hpfilter(dataset_pbi$pib_real, freq = 1600) 
+pib_potencial <- hp_result$trend 
+
+if (length(pib_potencial) == nrow(dataset_pbi)) {
+  # Paso 2: Crear el dataframe PBI_FINAL combinando `dataset_pbi` y `pib_potencial`
+  PBI_FINAL <- data.frame(
+    fecha = dataset_pbi$fecha,
+    pib_real = dataset_pbi$pib_real,
+    pib_potencial = pib_potencial
+  )
+} else {
+  stop("La longitud de `pib_potencial` no coincide con el número de filas de `dataset_pbi`.")
+}
+
+PBI_FINAL$brecha_fraccion <- (PBI_FINAL$pib_real - PBI_FINAL$pib_potencial) / PBI_FINAL$pib_potencial
+
+PBI_FINAL$brecha_porcentaje <- PBI_FINAL$brecha_fraccion * 100
+```
+
+
+
+#Indice de tipo de Cambio Real Multilateral.
+
+```{r}
+ITCRMSerie_full <- read_excel("Datos/Series originales/ITCRMSerie.xlsx", 
+                              sheet = "ITCRM y bilaterales",
+                              col_types = c("date", "numeric", rep("text", 14)))
+
+ITCRMSerie <- ITCRMSerie_full %>% select(1, 2)
+
+ITCRMSerie <- ITCRMSerie[6576:nrow(ITCRMSerie), ]
+
+ITCRMSerie <- ITCRMSerie %>%
+  rename(fecha = `Índices con base 17-12-15=100`, ITCRM=...2)
+
+
+ITCRMSerie <- ITCRMSerie %>%
+  mutate(trimestre = floor_date(fecha, "quarter"))
+
+ITCRM_trimestral <- ITCRMSerie %>%
+  group_by(trimestre) %>%
+  summarise(itcrm_promedio = mean(ITCRM, na.rm = TRUE))
+
+ITCRM_trimestral <- ITCRM_trimestral[-c(40, 41), ]
+```
+
+#Indice de Tipo de Cambio Real Bilateral con USA
+```{r}
+ITCRMSerie_usa <- read_excel("Datos/Series originales/ITCRMSerie.xlsx", 
+    col_types = c("date", "text", "text", 
+        "text", "text", "numeric", "text", 
+        "text", "text", "text", "text", "text", 
+        "text", "text", "text", "text"))
+
+ITCRMSerie_usa <- ITCRMSerie_usa %>% select(1, 6)
+ITCRMSerie_usa <- ITCRMSerie_usa %>%
+  rename(fecha = `Índices con base 17-12-15=100`, ITCRM=...6)
+
+
+ITCRMSerie_usa <- ITCRMSerie_usa %>%
+  mutate(trimestre = floor_date(fecha, "quarter"))
+
+ITCRM_trimestral_usa <- ITCRMSerie_usa %>%
+  group_by(trimestre) %>%
+  summarise(itcrm_promedio = mean(ITCRM, na.rm = TRUE))
+
+ITCRM_trimestral_usa <- ITCRM_trimestral_usa[73:nrow(ITCRM_trimestral_usa), ]
+
+ITCRM_trimestral_usa <- ITCRM_trimestral_usa[-c(40,41),]
+
+```
+
+#Riesgo Pais.
+```{r}
+
+# Paso 1: Leer el archivo y hoja específica
+EMBI_ <- read_excel("Datos/Series originales/EMBI .xlsx", sheet = "Sheet 1")
+
+# Paso 2: Transponer el dataframe y convertirlo en un dataframe estándar
+EMBI_transposed <- as.data.frame(t(EMBI_))
+
+# Paso 3: Renombrar las columnas como `fecha` y `riesgo_pais`
+colnames(EMBI_transposed) <- c("fecha", "riesgo_pais")
+
+# Paso 4: Eliminar la primera fila, que ahora es redundante
+EMBI_transposed <- EMBI_transposed[-1, ]
+
+# Paso 5: Agregar el dato inicial para "enero de 2015" con el valor 728
+EMBI_transposed <- rbind(data.frame(fecha = "enero de 2015", riesgo_pais = "728"), EMBI_transposed)
+
+# Paso 6: Crear una secuencia de fechas mensuales desde enero 2015 hasta septiembre 2024 en formato Date
+fecha <- seq(from = as.Date("2015-01-01"), to = as.Date("2024-09-01"), by = "month")
+
+# Aseguramos que las longitudes coincidan antes de la asignación
+if (nrow(EMBI_transposed) == length(fecha)) {
+  EMBI_transposed$fecha <- fecha          # Asignar la secuencia de fechas
+  EMBI_transposed$riesgo_pais <- as.numeric(EMBI_transposed$riesgo_pais)  # Convertir riesgo_pais a numérico
+} else {
+  stop("La cantidad de filas en EMBI_transposed no coincide con la longitud de la secuencia de fechas.")
+}
+# Paso 1: Crear una columna de trimestres a partir de la columna `fecha`
+EMBI_transposed <- EMBI_transposed %>%
+  mutate(trimestre = floor_date(fecha, "quarter"))
+
+EMBI_transposed <- EMBI_transposed %>%
+  select(-fecha)
+# Paso 2: Agrupar por `trimestre` y calcular el promedio de `riesgo_pais`
+EMBI_trimestral <- EMBI_transposed %>%
+  group_by(trimestre) %>%
+  summarise(riesgo_pais_promedio = mean(riesgo_pais, na.rm = TRUE))
+
+```
+#Tasa Soft
+```{r}
+remove(Tasa_Soft)
+```
+
+#Euribor 3 meses.
+```{r}
+Euriboe_3_meses <- read_excel("Datos/Series originales/EURIBOR REAL.xlsx", 
+    sheet = "DATA(FM)", col_types = c("text", 
+        "numeric"))
+Euriboe_3_meses <- Euriboe_3_meses[-(1:252), ]
+# Crear una secuencia de fechas mensuales desde enero 2015 hasta el número de filas de Euriboe_3_meses
+fecha_euri <- seq(from = as.Date("2015-01-01"), by = "month", length.out = nrow(Euriboe_3_meses))
+
+# Añadir la columna de fechas al dataframe
+Euriboe_3_meses <- Euriboe_3_meses %>%
+  mutate(fecha = fecha_euri)
+Euriboe_3_meses <- Euriboe_3_meses %>% select(-DATE)
+# Agrupar por trimestre y calcular el promedio para cada trimestre
+Euriboe_trimestral <- Euriboe_3_meses %>%
+  mutate(trimestre = floor_date(fecha, "quarter")) %>%  # Crear la columna de trimestres
+  group_by(trimestre) %>%
+  summarise(promedio_valor = mean(OBS.VALUE, na.rm = TRUE))  # Reemplaza `...2` por el nombre de la columna numérica
+
+# Verificar el resultado
+head(Euriboe_trimestral)
+
+
+
+```
+#Tasa de inflacion esperada.
+```{r}
+EI_SERIE_HISTORICA_1_ <- EI_SERIE_HISTORICA_1_[-(1:102),]
+EI_SERIE_HISTORICA_1_ <- EI_SERIE_HISTORICA_1_ %>% select(-Promedio)
+
+```
+
+#Tasa de Politica Monetaria
+```{r}
+Tasas_de_interés_por_depósitos_a_30_días_de_plazo_en_entidades_financieras_en_n_a_ <- read_excel("Datos/Series originales/Tasas de interés por depósitos a 30 días de plazo en entidades financieras (en n.a.).xlsx", 
+    sheet = "Hoja1", col_types = c("date", 
+        "text"))
+
+Tasas_de_interés_por_depósitos_a_30_días_de_plazo_en_entidades_financieras_en_n_a_ <- 
+  Tasas_de_interés_por_depósitos_a_30_días_de_plazo_en_entidades_financieras_en_n_a_ %>%
+  mutate(
+    Valor = as.numeric(gsub(",", ".", Valor)),  # Convertir `Valor` a numérico
+    fecha = as.Date(Fecha)                      # Convertir `fecha` a formato Date
+  )
+Tasas_de_interés_por_depósitos_a_30_días_de_plazo_en_entidades_financieras_en_n_a_ <- 
+  Tasas_de_interés_por_depósitos_a_30_días_de_plazo_en_entidades_financieras_en_n_a_ %>% select(-Fecha)    
+
+Tasas_de_interés_por_depósitos_a_30_días_de_plazo_en_entidades_financieras_en_n_a_ <- 
+  Tasas_de_interés_por_depósitos_a_30_días_de_plazo_en_entidades_financieras_en_n_a_ %>%mutate(trimestre = floor_date(fecha, "quarter")) %>%  # Crear la columna de trimestres
+  group_by(trimestre) %>%
+  summarise(promedio_valor = mean(Valor, na.rm = TRUE)) 
+
+    
+head(Tasas_de_interés_por_depósitos_a_30_días_de_plazo_en_entidades_financieras_en_n_a_)
+```
+#DOLAR/EURO
+
+```{r}
+USD/EUR <- xmlRoot(usd.xml)
+```
+

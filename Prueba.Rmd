@@ -1,0 +1,11 @@
+---
+title: "Preparacion de Datos MEP 1"
+author: "Francisco Mateo Cortez"
+date: "2024-11-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
